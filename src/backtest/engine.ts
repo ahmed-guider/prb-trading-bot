@@ -185,6 +185,14 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
   const dailyReturns: { date: string; pnl: number; trades: number }[] = [];
   const activePositions: Map<string, ActivePosition> = new Map();
 
+  // Diagnostic counters
+  let totalSymbolDays = 0;
+  let passedVolume = 0;
+  let passedTrend = 0;
+  let passedGap = 0;
+  let passedRelStr = 0;
+  let passedBreakout = 0;
+
   // Day-by-day simulation
   for (const date of sortedDates) {
     const dayStartEquity = equity;
@@ -202,22 +210,27 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
 
       const day = days.find((d) => d.date === date);
       if (!day) continue;
+      totalSymbolDays++;
 
       // Volume filter
       if (day.avgVolume < MIN_AVG_VOLUME) continue;
+      passedVolume++;
 
       // Trend filter: check uptrend on daily candles
       if (day.dailyCandles.length < params.trendEmaSlow) continue;
       const trend = isUptrend(day.dailyCandles, params.trendEmaFast, params.trendEmaSlow);
       if (!trend.uptrend) continue;
+      passedTrend++;
 
       // ----- Step 2: Gap filter -----
       const gap = calculateGap(day.previousClose, day.premarketHigh);
       if (gap.gapPercent < params.gapThreshold) continue;
+      passedGap++;
 
       // Relative strength vs SPY
       const spyGap = spyGapByDate.get(date) ?? 0;
       if (!hasRelativeStrength(gap.gapPercent, spyGap)) continue;
+      passedRelStr++;
 
       candidates.push({ day, gapPercent: gap.gapPercent });
     }
@@ -237,7 +250,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       const result = simulatePosition(position, mktCandles, params);
 
       if (result) {
-        cash += result.exitPrice * position.size + result.pnl;
+        cash += result.exitPrice * position.size;
         dayPnl += result.pnl;
         dayTradeCount++;
         trades.push(result);
@@ -275,6 +288,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       );
 
       if (!breakout) continue;
+      passedBreakout++;
 
       // Already have a position in this symbol?
       if (activePositions.has(day.symbol)) continue;
@@ -332,7 +346,7 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       const result = simulatePosition(position, remainingCandles, params);
 
       if (result) {
-        cash += result.exitPrice * position.size + result.pnl;
+        cash += result.exitPrice * position.size;
         dayPnl += result.pnl;
         dayTradeCount++;
         trades.push(result);
@@ -384,6 +398,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
       log.info(`${date}: ${dayTradeCount} trades, P&L=$${dayPnl.toFixed(2)}, equity=$${equity.toFixed(2)}`);
     }
   }
+
+  // Diagnostic summary
+  log.info("Filter funnel", {
+    totalSymbolDays,
+    passedVolume,
+    passedTrend,
+    passedGap,
+    passedRelStr,
+    passedBreakout,
+  });
 
   // Calculate metrics
   const metrics = calculateMetrics(trades, equityCurve, params.initialBalance);

@@ -19,11 +19,11 @@ const params: BacktestParams = {
   startDate: "2025-09-01",
   endDate: "2026-02-28",
   initialBalance: 100_000,
-  gapThreshold: 2.0,
+  gapThreshold: 1.5,
   trendEmaFast: 20,
   trendEmaSlow: 50,
-  momentumBodyRatio: 0.7,
-  momentumWickMax: 0.15,
+  momentumBodyRatio: 0.5,
+  momentumWickMax: 0.3,
   scaleOut1: 1,    // 1% stock price move (≈ 30% options gain with ~10x leverage)
   scaleOut2: 2,    // 2% stock price move
   scaleOut3: 3,    // 3% stock price move

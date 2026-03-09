@@ -73,8 +73,10 @@ export function isUptrend(
   const slopePositive = slope > 0;
   const structureBullish = higherHighs && higherLows;
 
+  // Uptrend = EMA crossover + positive slope. Structure is optional confirmation
+  // (requiring 10 consecutive higher highs/lows is too strict for daily candles).
   return {
-    uptrend: crossoverBullish && slopePositive && structureBullish,
+    uptrend: crossoverBullish && slopePositive,
     emaFast: Number.isNaN(emaFast) ? 0 : emaFast,
     emaSlow: Number.isNaN(emaSlow) ? 0 : emaSlow,
     slope,

@@ -14,13 +14,17 @@ export function calculateGap(previousClose: number, premarketHigh: number): GapA
 /**
  * Determine whether a stock shows relative strength vs. SPY.
  *
- * Relative strength = stock gaps up while SPY is flat (< 0.5%) or down.
+ * Relative strength = stock gap is at least 1.5% more than SPY gap,
+ * OR SPY is flat/down while the stock gaps up.
  */
 export function hasRelativeStrength(
   stockGapPercent: number,
   spyGapPercent: number,
 ): boolean {
-  return stockGapPercent > 0 && spyGapPercent < 0.5;
+  // Stock must be gapping up
+  if (stockGapPercent <= 0) return false;
+  // Either SPY is flat/down, or the stock significantly outperforms SPY
+  return spyGapPercent < 0.5 || (stockGapPercent - spyGapPercent) >= 1.5;
 }
 
 /**
