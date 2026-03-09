@@ -89,7 +89,7 @@ export function calculateMetrics(
 
   let maxDrawdown = 0;
   let maxDrawdownPercent = 0;
-  let peak = equityCurve.length > 0 ? equityCurve[0].equity : initialBalance;
+  let peak = initialBalance;
 
   for (const point of equityCurve) {
     if (point.equity > peak) {

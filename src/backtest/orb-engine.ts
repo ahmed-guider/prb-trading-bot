@@ -224,12 +224,19 @@ export async function runORBBacktest(
         // Manage existing position for this symbol first
         if (activePositions.has(symbol)) {
           const position = activePositions.get(symbol)!;
-          const result = simulateORCandle(position, candle, params);
-          if (result) {
-            cash += closePnlToCash(position, result.exitPrice);
-            dayPnl += result.pnl;
+          const simResult = simulateORCandle(position, candle, params);
+
+          // Record any partial close P&L from scale-outs
+          if (simResult.partialPnl !== 0) {
+            cash += simResult.partialCash;
+            dayPnl += simResult.partialPnl;
+          }
+
+          if (simResult.trade) {
+            cash += closeCashImpact(position, simResult.trade.exitPrice, position.size);
+            dayPnl += simResult.trade.pnl;
             dayTradeCount++;
-            trades.push(result);
+            trades.push(simResult.trade);
             activePositions.delete(symbol);
           }
           continue; // already in a position or just closed, skip breakout detection
@@ -313,7 +320,7 @@ export async function runORBBacktest(
           if (positionSize <= 0) continue;
         }
 
-        cash -= entryPrice * positionSize;
+        cash += openCashImpact(entryPrice, positionSize);
         tradesEntered++;
 
         const position: ORBPosition = {
@@ -356,7 +363,7 @@ export async function runORBBacktest(
       const pnlPercent = calculatePnlPercent(position, exitPrice);
       const holdingMinutes = (lastCandle.timestamp - position.entryTime) / (1000 * 60);
 
-      cash += closePnlToCash(position, exitPrice);
+      cash += closeCashImpact(position, exitPrice, position.size);
       dayPnl += pnl;
       dayTradeCount++;
 
@@ -434,28 +441,73 @@ function calculatePnlPercent(position: ORBPosition, exitPrice: number): number {
   return ((position.entryPrice - exitPrice) / position.entryPrice) * 100;
 }
 
-/** Return the cash received when closing a position at a given exit price. */
-function closePnlToCash(position: ORBPosition, exitPrice: number): number {
-  // For both long and short, we originally subtracted entryPrice * size from cash.
-  // On close we return the entry cost plus the P&L.
-  return position.entryPrice * position.size + calculatePnl(position, exitPrice);
+/**
+ * Calculate how cash changes when opening a position.
+ * Long: we spend cash to buy shares → -entryPrice * size
+ * Short: we receive cash from selling borrowed shares → +entryPrice * size
+ *        but we also need margin collateral, so we treat it as neutral (0)
+ *        and track P&L on close. Simplified: deduct for both to track exposure.
+ *
+ * For simplicity, we use a "notional exposure" model:
+ * Opening: cash -= notional (for both long and short)
+ * Closing: cash += notional + P&L (for both long and short)
+ * This ensures equity = cash when no positions are open.
+ */
+function openCashImpact(entryPrice: number, size: number): number {
+  return -(entryPrice * size);
+}
+
+function closeCashImpact(position: ORBPosition, exitPrice: number, closeSize: number): number {
+  const pnlPerShare = position.direction === 'long'
+    ? exitPrice - position.entryPrice
+    : position.entryPrice - exitPrice;
+  // Return the original notional of the closed shares + P&L
+  return position.entryPrice * closeSize + pnlPerShare * closeSize;
+}
+
+/** Get the mark-to-market value of all open positions. */
+function getOpenPositionsValue(
+  positions: Map<string, ORBPosition>,
+  lastPrices: Map<string, number>,
+): number {
+  let value = 0;
+  for (const [symbol, pos] of positions) {
+    const currentPrice = lastPrices.get(symbol) ?? pos.entryPrice;
+    // Notional committed + unrealized P&L
+    const pnlPerShare = pos.direction === 'long'
+      ? currentPrice - pos.entryPrice
+      : pos.entryPrice - currentPrice;
+    value += pos.entryPrice * pos.size + pnlPerShare * pos.size;
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------
 // Single-candle position simulation
 // ---------------------------------------------------------------------------
 
+interface SimResult {
+  /** Full close trade result, or null if position remains open. */
+  trade: BacktestTradeResult | null;
+  /** P&L from any partial scale-out this candle (not a full close). */
+  partialPnl: number;
+  /** Cash returned from partial scale-out. */
+  partialCash: number;
+}
+
 /**
  * Process a single candle for an open ORB position.
  * Check stop loss FIRST (conservative), then targets, then time stop.
- * Returns a BacktestTradeResult if the position is closed, or null if still open.
+ * Returns trade result if closed, plus any partial scale-out P&L.
  */
 function simulateORCandle(
   position: ORBPosition,
   candle: Candle,
   params: ORBParams,
-): BacktestTradeResult | null {
+): SimResult {
   const { direction } = position;
+  let partialPnl = 0;
+  let partialCash = 0;
 
   // ----- Stop loss check (FIRST - conservative, assume worst case) -----
   const stopHit = direction === 'long'
@@ -469,47 +521,50 @@ function simulateORCandle(
     const holdingMinutes = (candle.timestamp - position.entryTime) / (1000 * 60);
 
     return {
-      symbol: position.symbol,
-      date: position.date,
-      entryTime: tsToISO(position.entryTime),
-      entryPrice: position.entryPrice,
-      exitTime: tsToISO(candle.timestamp),
-      exitPrice,
-      pnl,
-      pnlPercent,
-      exitReason: position.stopMovedToBreakeven ? "breakeven_stop" : "stop_loss",
-      holdingMinutes,
+      trade: {
+        symbol: position.symbol,
+        date: position.date,
+        entryTime: tsToISO(position.entryTime),
+        entryPrice: position.entryPrice,
+        exitTime: tsToISO(candle.timestamp),
+        exitPrice,
+        pnl,
+        pnlPercent,
+        exitReason: position.stopMovedToBreakeven ? "breakeven_stop" : "stop_loss",
+        holdingMinutes,
+      },
+      partialPnl: 0,
+      partialCash: 0,
     };
   }
 
-  // ----- Target 2 check (full close of remaining) -----
+  // ----- Target 2 check (close remaining position) -----
   const target2Hit = direction === 'long'
     ? candle.high >= position.target2
     : candle.low <= position.target2;
 
   if (!position.scaledOut2 && target2Hit) {
-    // Scale out 33% at target 2 and close remaining
     position.scaledOut2 = true;
-    const scaleShares = Math.floor(position.originalSize * 0.33);
-    position.size = Math.max(1, position.size - scaleShares);
-
-    // If target 2 hit, we fully close the remaining position
     const exitPrice = position.target2;
     const pnl = calculatePnl(position, exitPrice);
     const pnlPercent = calculatePnlPercent(position, exitPrice);
     const holdingMinutes = (candle.timestamp - position.entryTime) / (1000 * 60);
 
     return {
-      symbol: position.symbol,
-      date: position.date,
-      entryTime: tsToISO(position.entryTime),
-      entryPrice: position.entryPrice,
-      exitTime: tsToISO(candle.timestamp),
-      exitPrice,
-      pnl,
-      pnlPercent,
-      exitReason: "target_2",
-      holdingMinutes,
+      trade: {
+        symbol: position.symbol,
+        date: position.date,
+        entryTime: tsToISO(position.entryTime),
+        entryPrice: position.entryPrice,
+        exitTime: tsToISO(candle.timestamp),
+        exitPrice,
+        pnl,
+        pnlPercent,
+        exitReason: "target_2",
+        holdingMinutes,
+      },
+      partialPnl: 0,
+      partialCash: 0,
     };
   }
 
@@ -521,7 +576,16 @@ function simulateORCandle(
   if (!position.scaledOut1 && target1Hit) {
     position.scaledOut1 = true;
     const scaleShares = Math.floor(position.originalSize * 0.33);
-    position.size = Math.max(1, position.size - scaleShares);
+    if (scaleShares > 0 && position.size > scaleShares) {
+      // Record partial close P&L
+      const exitPrice = position.target1;
+      const pnlPerShare = direction === 'long'
+        ? exitPrice - position.entryPrice
+        : position.entryPrice - exitPrice;
+      partialPnl = pnlPerShare * scaleShares;
+      partialCash = closeCashImpact(position, exitPrice, scaleShares);
+      position.size -= scaleShares;
+    }
 
     // Move stop to breakeven
     position.stopLoss = position.entryPrice;
@@ -537,19 +601,23 @@ function simulateORCandle(
     const holdingMinutes = (candle.timestamp - position.entryTime) / (1000 * 60);
 
     return {
-      symbol: position.symbol,
-      date: position.date,
-      entryTime: tsToISO(position.entryTime),
-      entryPrice: position.entryPrice,
-      exitTime: tsToISO(candle.timestamp),
-      exitPrice,
-      pnl,
-      pnlPercent,
-      exitReason: "time_stop",
-      holdingMinutes,
+      trade: {
+        symbol: position.symbol,
+        date: position.date,
+        entryTime: tsToISO(position.entryTime),
+        entryPrice: position.entryPrice,
+        exitTime: tsToISO(candle.timestamp),
+        exitPrice,
+        pnl,
+        pnlPercent,
+        exitReason: "time_stop",
+        holdingMinutes,
+      },
+      partialPnl,
+      partialCash,
     };
   }
 
-  // Position still open
-  return null;
+  // Position still open, but may have had a partial scale-out
+  return { trade: null, partialPnl, partialCash };
 }

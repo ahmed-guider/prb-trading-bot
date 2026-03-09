@@ -10,7 +10,7 @@ A catalog of day trading strategies we can backtest using our existing infrastru
 | 1 | Gap Fade | Planned | — | — | |
 | 2 | Gap & Go with VWAP | Planned | — | — | |
 | 3 | Earnings Gap Momentum | Planned | — | — | |
-| 4 | Opening Range Breakout (ORB) | Planned | — | — | Top priority |
+| 4 | Opening Range Breakout (ORB) | ✅ Profitable | 49-51% | 2.26-2.90 | 30-min OR best. 39/46 configs profitable. |
 | 5 | Oversold Bounce | Planned | — | — | |
 | 6 | SPY Mean Reversion | Planned | — | — | Top priority |
 | 7 | Relative Strength Momentum | Planned | — | — | |
@@ -124,13 +124,13 @@ A catalog of day trading strategies we can backtest using our existing infrastru
 
 ---
 
-## 4. Opening Range Breakout (ORB) ⭐ TOP PRIORITY
+## 4. Opening Range Breakout (ORB) ✅ PROFITABLE
 
-**Thesis:** The first 15 minutes of trading establishes a range as buyers and sellers find equilibrium. A breakout from this range with volume indicates directional conviction for the rest of the morning.
+**Thesis:** The first 15-30 minutes of trading establishes a range as buyers and sellers find equilibrium. A breakout from this range with volume indicates directional conviction for the rest of the morning.
 
 ### Rules
 - **Universe:** SPY, QQQ, and top 10 S&P 500 stocks by volume
-- **Opening range:** High and low of the first 15 minutes (9:30-9:45 AM ET, first 3 five-min candles)
+- **Opening range:** High and low of the first 30 minutes (9:30-10:00 AM ET, first 6 five-min candles)
 - **Entry (Long):** Buy when a 5-min candle closes above the opening range high. Confirm: candle has strong body (> 50% of range) and volume > average.
 - **Entry (Short):** Short when a 5-min candle closes below the opening range low. Same confirmation.
 - **Stop:** Opposite side of the opening range (buy stop = OR low, short stop = OR high)
@@ -140,25 +140,47 @@ A catalog of day trading strategies we can backtest using our existing infrastru
 - **Time stop:** 12:00 PM ET
 
 ### Scale-out
-- 33% at 1R
-- 33% at 2R
-- 34% at time stop or trail stop (move stop to breakeven after 1R)
+- 33% at 1R (move stop to breakeven)
+- 67% at 2R or time stop
 
 ### Position Sizing
-- Risk = opening range width × shares
-- Size = (account × 2%) / risk per share
+- Risk = opening range width x shares
+- Size = (account x 2%) / risk per share
 
 ### Edge
 - One of the most studied intraday strategies with decades of backtesting data
 - Works on liquid instruments (SPY, QQQ) with tight spreads
 - Mechanical rules — no discretion needed
 - The opening range captures overnight information being priced in
-- Breakouts with volume have 55-65% win rate historically
 
-### Filters to Improve
-- Avoid trading on FOMC days, CPI release days (whipsaw)
-- Require OR width to be between 0.3% and 1.5% of price (too narrow = noise, too wide = risk)
-- Only take trades in the direction of the daily trend (EMA filter)
+### Backtest Results (Sep 2025 - Feb 2026, 14 symbols, 124 trading days)
+
+**Initial sweep (37 combos):**
+- Best: OR=30min → +$18,360 (+18.4%), 49% win, Sharpe 2.54, DD 9.3%
+- 30-min opening range significantly outperforms 5-min and 15-min
+- Short-only has better risk-adjusted returns than long-only
+
+**Focused sweep around OR=30min (46 combos, 39 profitable):**
+
+| Config | Return | Sharpe | Win% | Max DD | Trades |
+|--------|--------|--------|------|--------|--------|
+| 30m + vol filter 0.8x | +28.6% | 2.90 | 51% | 18.8% | 869 |
+| 30m + R=2.0/4.0 (wide targets) | +34.5% | 2.26 | 50% | 11.9% | 702 |
+| 30m + time stop 11 AM | +26.2% | 2.61 | 49% | 5.5% | 702 |
+| 30m + stop buffer 0.5% | +25.4% | 2.45 | 50% | 10.6% | 710 |
+| 30m + short-only | +13.2% | 2.06 | 48% | 5.8% | 407 |
+| 30m baseline (R=1.0/2.0) | +12.3% | 2.31 | 50% | 11.6% | 705 |
+
+**Recommended config** (best risk-adjusted): OR=30min, R=1.0/2.0, time stop 11 AM
+- +26.2% return, Sharpe 2.61, only 5.5% max drawdown
+
+### Key Insights
+- 30-min OR >> 15-min >> 5-min (longer range = better signal quality)
+- Lower volume filter (0.8x) improves results (more trades pass, good ones compensate)
+- Early time stop (11 AM) dramatically reduces drawdown while preserving most returns
+- Short-only has the lowest drawdown (5.8%) — shorts work well in this strategy
+- Trend filter slightly hurts performance (reduces trade count without improving win rate)
+- Risk per trade and max positions have minimal impact (already near 0 positions open at once with OR=30min)
 
 ### Infrastructure Reuse
 - Reuses: 5-min data, paper broker, backtest engine, trend indicator
