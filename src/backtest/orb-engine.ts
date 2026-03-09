@@ -150,10 +150,13 @@ export async function runORBBacktest(
   }
 
   // Collect all unique trading days across all symbols, sorted
+  // Filter to the requested date range (important when preloaded data is wider)
   const allDates = new Set<string>();
   for (const days of allData.values()) {
     for (const d of days) {
-      allDates.add(d.date);
+      if (d.date >= params.startDate && d.date <= params.endDate) {
+        allDates.add(d.date);
+      }
     }
   }
   const sortedDates = [...allDates].sort();
