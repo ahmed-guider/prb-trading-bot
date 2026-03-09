@@ -10,7 +10,7 @@ A catalog of day trading strategies we can backtest using our existing infrastru
 | 1 | Gap Fade | Planned | — | — | |
 | 2 | Gap & Go with VWAP | Planned | — | — | |
 | 3 | Earnings Gap Momentum | Planned | — | — | |
-| 4 | Opening Range Breakout (ORB) | ✅ Profitable | 49-51% | 2.26-2.90 | 30-min OR best. 39/46 configs profitable. |
+| 4 | Opening Range Breakout (ORB) | ✅ Validated OOS | 49% | 1.39 | 4yr +422%, 8971 trades. OOS on 2022-2023 confirmed. |
 | 5 | Oversold Bounce | Planned | — | — | |
 | 6 | SPY Mean Reversion | Planned | — | — | Top priority |
 | 7 | Relative Strength Momentum | Planned | — | — | |
