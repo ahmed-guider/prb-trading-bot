@@ -6,3 +6,4 @@ dist
 *.db-wal
 dashboard/dist
 .cache/
+logs/
