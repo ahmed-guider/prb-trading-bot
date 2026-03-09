@@ -8,6 +8,7 @@ import type { TradeFilters } from "./data/storage.js";
 import { PaperBroker } from "./execution/paper-broker.js";
 import { runBacktest, type BacktestParams } from "./backtest/engine.js";
 import { getPerformanceStats } from "./reporting/stats.js";
+import { getORBStatus } from "./strategy/orb-live.js";
 
 const log = createLogger("server");
 
@@ -71,7 +72,20 @@ export function createServer(broker: PaperBroker): FastifyInstance {
   // -----------------------------------------------------------------------
 
   server.get("/api/health", async () => {
-    return { status: "ok", timestamp: new Date().toISOString() };
+    return {
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      strategy: "ORB (30min, R=1.5/3.0)",
+      botState: getORBStatus().phase,
+    };
+  });
+
+  // -----------------------------------------------------------------------
+  // GET /api/orb-status — ORB-specific live status
+  // -----------------------------------------------------------------------
+
+  server.get("/api/orb-status", async () => {
+    return getORBStatus();
   });
 
   // -----------------------------------------------------------------------
