@@ -139,7 +139,26 @@ interface ActivePosition {
  * gap-up setups, detecting breakout entries on 5-min candles, and
  * simulating trade management (scale-outs, stop loss, time stop).
  */
-export async function runBacktest(params: BacktestParams): Promise<BacktestResult> {
+/** Pre-loaded data cache to avoid re-fetching during parameter sweeps. */
+export interface PreloadedData {
+  allData: Map<string, BacktestDay[]>;
+  spyData: BacktestDay[];
+}
+
+/** Load data once for use across multiple backtest runs (e.g., sweeps). */
+export async function preloadData(symbols: string[], startDate: string, endDate: string): Promise<PreloadedData> {
+  const allData = await loadBacktestData(symbols, startDate, endDate);
+  let spyData: BacktestDay[] = [];
+  if (!symbols.includes("SPY")) {
+    const spyMap = await loadBacktestData(["SPY"], startDate, endDate);
+    spyData = spyMap.get("SPY") ?? [];
+  } else {
+    spyData = allData.get("SPY") ?? [];
+  }
+  return { allData, spyData };
+}
+
+export async function runBacktest(params: BacktestParams, preloaded?: PreloadedData): Promise<BacktestResult> {
   log.info("Starting backtest", {
     symbols: params.symbols.length,
     startDate: params.startDate,
@@ -147,16 +166,22 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
     initialBalance: params.initialBalance,
   });
 
-  // Load historical data
-  const allData = await loadBacktestData(params.symbols, params.startDate, params.endDate);
+  // Use pre-loaded data if available, otherwise fetch
+  let allData: Map<string, BacktestDay[]>;
+  let spyData: BacktestDay[];
 
-  // Also load SPY data for relative strength checks
-  let spyData: BacktestDay[] = [];
-  if (!params.symbols.includes("SPY")) {
-    const spyMap = await loadBacktestData(["SPY"], params.startDate, params.endDate);
-    spyData = spyMap.get("SPY") ?? [];
+  if (preloaded) {
+    allData = preloaded.allData;
+    spyData = preloaded.spyData;
   } else {
-    spyData = allData.get("SPY") ?? [];
+    allData = await loadBacktestData(params.symbols, params.startDate, params.endDate);
+    spyData = [];
+    if (!params.symbols.includes("SPY")) {
+      const spyMap = await loadBacktestData(["SPY"], params.startDate, params.endDate);
+      spyData = spyMap.get("SPY") ?? [];
+    } else {
+      spyData = allData.get("SPY") ?? [];
+    }
   }
 
   // Build a map of SPY gap% by date for quick lookups
