@@ -291,7 +291,7 @@ export function createServer(broker: PaperBroker): FastifyInstance {
   // Global error handler
   // -----------------------------------------------------------------------
 
-  server.setErrorHandler((error, _request, reply) => {
+  server.setErrorHandler((error: Error, _request, reply) => {
     log.error("Unhandled request error", error);
     reply.status(500).send({
       error: "Internal server error",
