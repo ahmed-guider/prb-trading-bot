@@ -1,5 +1,6 @@
 import { config } from "../config.js";
 import { createLogger } from "../logger.js";
+import { readFromCache, writeToCache } from "./cache.js";
 import type { Candle } from "../types.js";
 
 const log = createLogger("market-data");
@@ -103,6 +104,12 @@ export async function getHistoricalBars(
   end: string,
   limit?: number,
 ): Promise<Candle[]> {
+  // Check cache first (only for unlimited requests — cached data is complete)
+  if (limit === undefined) {
+    const cached = readFromCache(symbol, timeframe, start, end);
+    if (cached) return cached;
+  }
+
   const candles: Candle[] = [];
   let pageToken: string | undefined;
 
@@ -143,7 +150,108 @@ export async function getHistoricalBars(
     count: candles.length,
   });
 
-  return limit !== undefined ? candles.slice(0, limit) : candles;
+  const result = limit !== undefined ? candles.slice(0, limit) : candles;
+
+  // Write to cache (only for unlimited requests)
+  if (limit === undefined && result.length > 0) {
+    writeToCache(symbol, timeframe, start, end, result);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// getMultiHistoricalBars — batch endpoint for multiple symbols at once
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch historical bars for multiple symbols in a single API call.
+ * Uses Alpaca's /v2/stocks/bars endpoint which accepts a comma-separated
+ * symbols parameter. Much faster than individual requests.
+ */
+export async function getMultiHistoricalBars(
+  symbols: string[],
+  timeframe: string,
+  start: string,
+  end: string,
+): Promise<Map<string, Candle[]>> {
+  const result = new Map<string, Candle[]>();
+
+  // Check cache for each symbol first, collect uncached ones
+  const uncached: string[] = [];
+  for (const symbol of symbols) {
+    const cached = readFromCache(symbol, timeframe, start, end);
+    if (cached) {
+      result.set(symbol, cached);
+    } else {
+      uncached.push(symbol);
+    }
+  }
+
+  if (uncached.length === 0) {
+    log.info(`All ${symbols.length} symbols served from cache (${timeframe} ${start}→${end})`);
+    return result;
+  }
+
+  log.info(`Fetching ${uncached.length} symbols via batch API (${result.size} cached)`);
+
+  // Alpaca multi-bar endpoint: /v2/stocks/bars?symbols=SPY,QQQ,...
+  // Process in batches of 10 symbols to avoid URL length issues
+  const MULTI_BATCH = 10;
+  for (let i = 0; i < uncached.length; i += MULTI_BATCH) {
+    const batch = uncached.slice(i, i + MULTI_BATCH);
+    const batchCandles = new Map<string, Candle[]>();
+    for (const sym of batch) {
+      batchCandles.set(sym, []);
+    }
+
+    let pageToken: string | undefined;
+
+    do {
+      const params: Record<string, string> = {
+        symbols: batch.join(","),
+        timeframe,
+        start,
+        end,
+        feed: "sip",
+        limit: "10000",
+      };
+
+      if (pageToken) {
+        params.page_token = pageToken;
+      }
+
+      const data = await alpacaFetch("/v2/stocks/bars", params);
+
+      // Response format: { bars: { "SPY": [...], "QQQ": [...] }, next_page_token: ... }
+      const bars: Record<string, AlpacaBar[]> = data.bars ?? {};
+      for (const [sym, symBars] of Object.entries(bars)) {
+        const existing = batchCandles.get(sym) ?? [];
+        for (const bar of symBars) {
+          existing.push(mapBarToCandle(bar));
+        }
+        batchCandles.set(sym, existing);
+      }
+
+      pageToken = data.next_page_token ?? undefined;
+    } while (pageToken);
+
+    // Store results and cache
+    for (const [sym, candles] of batchCandles) {
+      result.set(sym, candles);
+      if (candles.length > 0) {
+        writeToCache(sym, timeframe, start, end, candles);
+      }
+      log.debug(`Batch fetched ${candles.length} bars for ${sym} (${timeframe})`);
+    }
+
+    // Small delay between batches
+    if (i + MULTI_BATCH < uncached.length) {
+      await sleep(300);
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

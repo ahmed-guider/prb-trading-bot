@@ -1,5 +1,5 @@
 import { createLogger } from "../logger.js";
-import { getHistoricalBars } from "../data/market-data.js";
+import { getHistoricalBars, getMultiHistoricalBars } from "../data/market-data.js";
 import type { Candle } from "../types.js";
 
 const log = createLogger("backtest-data-loader");
@@ -130,26 +130,31 @@ export async function loadBacktestData(
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
   const lookbackStr = lookbackDate.toISOString().slice(0, 10);
 
-  // Process symbols in batches to respect rate limits
-  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
-    const batch = symbols.slice(i, i + BATCH_SIZE);
+  // Batch-fetch all daily and 5-min candles at once (uses cache + multi-symbol API)
+  log.info(`Batch-fetching daily candles for ${symbols.length} symbols...`);
+  const allDailyCandles = await getMultiHistoricalBars(symbols, "1Day", lookbackStr, endDate);
 
-    const batchPromises = batch.map(async (symbol) => {
-      try {
-        const days = await loadSymbolData(symbol, lookbackStr, startDate, endDate);
-        result.set(symbol, days);
-        log.info(`${symbol}: loaded ${days.length} backtest days`);
-      } catch (err) {
-        log.warn(`${symbol}: failed to load backtest data`, err);
+  log.info(`Batch-fetching 5-min candles for ${symbols.length} symbols...`);
+  const allFiveMinCandles = await getMultiHistoricalBars(symbols, "5Min", startDate, endDate);
+
+  // Organize into BacktestDay[] per symbol
+  for (const symbol of symbols) {
+    try {
+      const dailyCandles = allDailyCandles.get(symbol) ?? [];
+      const fiveMinCandles = allFiveMinCandles.get(symbol) ?? [];
+
+      if (dailyCandles.length === 0) {
+        log.warn(`${symbol}: no daily candles found`);
         result.set(symbol, []);
+        continue;
       }
-    });
 
-    await Promise.all(batchPromises);
-
-    // Rate-limit pause between batches
-    if (i + BATCH_SIZE < symbols.length) {
-      await sleep(BATCH_DELAY_MS);
+      const days = organizeSymbolData(symbol, dailyCandles, fiveMinCandles, startDate, endDate);
+      result.set(symbol, days);
+      log.info(`${symbol}: loaded ${days.length} backtest days`);
+    } catch (err) {
+      log.warn(`${symbol}: failed to load backtest data`, err);
+      result.set(symbol, []);
     }
   }
 
@@ -158,25 +163,15 @@ export async function loadBacktestData(
 }
 
 /**
- * Load daily + 5-min data for a single symbol and organise into BacktestDay[].
+ * Organize pre-fetched candle data into BacktestDay[] for a single symbol.
  */
-async function loadSymbolData(
+function organizeSymbolData(
   symbol: string,
-  lookbackStart: string,
+  dailyCandles: Candle[],
+  fiveMinCandles: Candle[],
   startDate: string,
   endDate: string,
-): Promise<BacktestDay[]> {
-  // Fetch daily candles (including lookback period for EMA/avg volume)
-  const dailyCandles = await getHistoricalBars(symbol, "1Day", lookbackStart, endDate);
-
-  if (dailyCandles.length === 0) {
-    log.warn(`${symbol}: no daily candles found`);
-    return [];
-  }
-
-  // Fetch 5-min candles for the actual backtest period
-  const fiveMinCandles = await getHistoricalBars(symbol, "5Min", startDate, endDate);
-
+): BacktestDay[] {
   // Determine trading days within the backtest range from daily candles
   const tradingDays = extractTradingDays(dailyCandles, startDate, endDate);
 
@@ -184,7 +179,6 @@ async function loadSymbolData(
 
   for (const dateStr of tradingDays) {
     // Find the index of this day in the full daily candle array
-    const dayMs = new Date(`${dateStr}T00:00:00Z`).getTime();
     const dayIndex = dailyCandles.findIndex((c) => {
       const cDate = new Date(c.timestamp).toISOString().slice(0, 10);
       return cDate === dateStr;
